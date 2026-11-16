@@ -1,6 +1,6 @@
 # Generated output
-results/
-results/*.csv
+# results/
+# results/*.csv
 
 # Python artifacts
 __pycache__/

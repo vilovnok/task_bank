@@ -23,11 +23,11 @@ from services_t import ENDPOINTS, get_token
 SERVICE = "vsellm"
 MODEL = "anthropic/claude-opus-5"
 TEMPERATURE = 0.1
-MAX_TOKENS = 1024
+# MAX_TOKENS = 1024
 URL = ENDPOINTS[SERVICE]
 
 MAX_RETRIES = 3
-RETRY_DELAY = 120
+RETRY_DELAY = 60 * 8
 
 
 def load_system_prompt() -> str:
@@ -106,15 +106,64 @@ def main():
             print(f"[{i}/{len(rows)}] SKIP: {e}\n")
             continue
 
+        user_prompt = """
+        {
+          "answer": [
+            {
+              "ID чат-сессии": "714fc80a-ed3c-448b-9f6f-6fda13473cd3",
+              "Тип канала": "SBBOL_MOBILE_APP",
+              "Название сплита": "Виртуальный оператор",
+              "Текст сообщения": "Здравствуйте! Подскажите, какие лимиты действуют по моей бизнес-карте?",
+              "Дата сообщения": "2026-11-16 10:00:00",
+              "Источник сообщения": "Клиент",
+              "Сценарий": "Лимиты по бизнес-карте",
+              "Агент": "cb_gigachat_21_business_card_limits",
+              "Разметка": "Итоговая разметка",
+              "Ключ для разметки": "0",
+              "ID запроса": "1510_34714"
+            },
+            {
+              "ID чат-сессии": "714fc80a-ed3c-448b-9f6f-6fda13473cd3",
+              "Тип канала": "SBBOL_MOBILE_APP",
+              "Название сплита": "Виртуальный оператор",
+              "Текст сообщения": "Уточните, пожалуйста, вас интересует лимит на снятие наличных или на оплату покупок?",
+              "Дата сообщения": "2026-11-16 10:00:15",
+              "Источник сообщения": "Оператор",
+              "Сценарий": "Лимиты по бизнес-карте",
+              "Агент": "cb_gigachat_21_business_card_limits",
+              "Разметка": "Итоговая разметка",
+              "Ключ для разметки": "0",
+              "ID запроса": "1510_34715"
+            },
+            {
+              "ID чат-сессии": "714fc80a-ed3c-448b-9f6f-6fda13473cd3",
+              "Тип канала": "SBBOL_MOBILE_APP",
+              "Название сплита": "Виртуальный оператор",
+              "Текст сообщения": "Меня интересует лимит на снятие наличных.",
+              "Дата сообщения": "2026-11-16 10:00:30",
+              "Источник сообщения": "Клиент",
+              "Сценарий": "Лимиты по бизнес-карте",
+              "Агент": "cb_gigachat_21_business_card_limits",
+              "Разметка": "Итоговая разметка",
+              "Ключ для разметки": "0",
+              "ID запроса": "1510_34716"
+            }
+          ],
+          "spam": false
+        }
+        """.strip()
+
         payload = {
             "model": MODEL,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
+                {"role": "user", "content": user_prompt},
             ],
             "temperature": TEMPERATURE,
-            "max_tokens": MAX_TOKENS,
+            # "max_tokens": 10000,
         }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+
 
         answer = None
         for attempt in range(1, MAX_RETRIES + 1):
@@ -124,7 +173,7 @@ def main():
                     headers=headers,
                     json=payload,
                     verify=False,
-                    timeout=(60, 180),
+                    timeout=(60*2, 60 * 8),
                 )
                 resp.raise_for_status()
                 answer = get_content_from_response(resp.json())
