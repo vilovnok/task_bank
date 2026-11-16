@@ -1,0 +1,5 @@
+Название задачи
+Тест моделью проекта Чат-бот Переспрос агента (anthropic/claude-opus-4.8) экзамен
+
+URL TASK
+https://tagme.sberdevices.ru/company/2bdf1e09-59e1-469c-b055-f81891aa3e64/project/6d861677-4aec-4665-be5b-c7a2374d8137/task/f8305ff2-01cf-49a5-8dba-ac656a3d3b55/overview
