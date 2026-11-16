@@ -1,0 +1,14 @@
+# Generated output
+results/
+results/*.csv
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables
+.env
+
+# Dataset (large / not needed in repo)
+data/tagme_balanced_small_dataset.csv
