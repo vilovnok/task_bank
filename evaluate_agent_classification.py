@@ -78,7 +78,7 @@ def main():
         "Content-Type": "application/json",
     }
 
-    with open(CSV_PATH, encoding="utf-8") as f:
+    with open(CSV_PATH, encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
 
     print(f"Rows: {len(rows)} | Model: {MODEL} | Service: {SERVICE}\n")
@@ -152,7 +152,7 @@ def main():
 
         if answer is None:
             predicted_agent = ""
-            expected_agent = row.get("OUTPUT:agent", "").strip()
+            expected_agent = row.get("GOLDEN:agent", "").strip()
             score = 0
             status = "all_retries_failed"
         else:
@@ -160,12 +160,12 @@ def main():
 
             if answer_data is not None:
                 predicted_agent = answer_data.get("agent", "")
-                expected_agent = row.get("OUTPUT:agent", "").strip()
+                expected_agent = row.get("GOLDEN:agent", "").strip()
                 score = 1 if predicted_agent == expected_agent else 0
                 status = "success"
             else:
                 predicted_agent = ""
-                expected_agent = row.get("OUTPUT:agent", "").strip()
+                expected_agent = row.get("GOLDEN:agent", "").strip()
                 score = 0
                 status = "parse_error"
 
