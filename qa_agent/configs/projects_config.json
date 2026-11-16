@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "manager": {
+    "check_interval_seconds": 3600,
+    "run_once_by_default": false
+  },
+  "stands": {
+    "cloud": {
+      "host": "https://tagme.sberdevices.ru",
+      "cfg_path": "~/configs/cloud_sberdevices.cfg"
+    },
+    "sigma": {
+      "host": "https://tagme.sigma.sbrf.ru",
+      "cfg_path": "~/configs/ml_config_sigma.cfg"
+    }
+  },
+  "projects": [
+    {
+      "enabled": true,
+      "project_id": "d8f48f67-8632-4201-9313-fde85732bba9",
+      "project_name": "Выделение споттерных слов на аудио",
+      "stand_name": "cloud",
+      "organization_id": "1bf17a92-158c-4ff6-8e16-83a51386ab09",
+
+      "tracking_start_date": "2026-05-27",
+
+      "daily_feedback_enabled": true,
+      "feedback_scope": "all",
+
+      "paths": {
+        "quality_script": "scripts/calc_quality_spotter.py",
+        "comments_script": "scripts/generate_comments.py",
+        "summary_script": "scripts/generate_summary.py",
+        "short_rules_file": "rules/short_rules.md",
+        "comment_prompt_file": "prompts/comment_prompt.md",
+        "summary_prompt_system_file": "prompts/summary_prompt_system.md",
+        "summary_prompt_user_file": "prompts/summary_prompt_user.md",
+        "tagme_config": "~/configs/ml_config.cfg"
+      },
+
+      "fir_upload": {
+        "enabled": true,
+        "base_path": "\\\\bordo105.sigma.sbrf.ru\\Vol6\\Dataset2\\Менеджер проекта\\Выделение споттерных слов на аудио_ос"
+      },
+
+      "task_selection": {
+        "include_active_tasks": true,
+        "include_done_tasks": true,
+        "skip_task_kinds": ["training", "exam", "education", "qualification"]
+      }
+    }
+  ]
+}

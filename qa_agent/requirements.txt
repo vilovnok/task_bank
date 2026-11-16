@@ -1,0 +1,20 @@
+# QA Agent Requirements
+
+# TagMe SDK для работы с разметкой
+crowd-sdk>=0.1.0
+
+# Data processing
+pandas>=1.5.0
+numpy>=1.23.0
+
+# Excel support
+openpyxl>=3.0.0
+
+# LLM integration через TagMe прокси
+requests>=2.28.0
+pillow>=9.0.0  # Для vsellm_client
+loguru>=0.6.0  # Для vsellm_client
+
+# SMB для загрузки на FIR
+smbprotocol>=1.10.0
+python-dotenv>=0.19.0

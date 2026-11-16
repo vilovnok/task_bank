@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data directory (results from processing)
+data/
+
+# Temporary results (for debugging, will be saved to FIR later)
+temp_results/
+*/temp/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# TagMe credentials (keep secure!)
+*.cfg
+!example.cfg
+
+# Environment variables (credentials for FIR upload)
+.env
+
+# State backups
+state/*.backup
+state/*.bak
+
+# НЕ игнорируем processed_assignments - это важные данные для отслеживания
+# state/processed_assignments/
