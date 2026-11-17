@@ -38,7 +38,7 @@ log = logging.getLogger("generate_comments")
 # =========================
 
 # LLM настройки через TagMe прокси
-LLM_MODEL = "GigaChat-2-Max"  # Доступные: GigaChat, GigaChat-2-Max, GigaChat-3-Pro и др.
+LLM_MODEL = "anthropic/claude-opus-4.8"  # Антропик Claude Opus 4.8
 LLM_TIMEOUT_SEC = 180
 LLM_TEMPERATURE = 0.2
 
