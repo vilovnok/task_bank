@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 """
-Simple script: read system prompt + CSV, call vsellm, print model answers.
-Uses the same request structure as services_t.py chat().
+Refactored: ThreadPoolExecutor for parallel API calls.
+Thread-safe logging, robust error handling, KeyboardInterrupt safety.
+
+Usage:
+    python evaluate_agent_classification.py -w 20  # 20 parallel workers
 """
 
+import argparse
 import csv
 import json
+import os
 import requests
 import sys
 import time
+import threading
+import concurrent.futures
 from pathlib import Path
+from datetime import datetime, timezone
 
 BASE_DIR = Path(__file__).resolve().parent
 CSV_PATH = BASE_DIR / "data" / "tagme_balanced_small_dataset.csv"
 SYSTEM_PROMPT_PATH = BASE_DIR / "data" / "task_mank_system_prompt_2_5.md"
 
-sys.path.insert(0, str(BASE_DIR.parent))  # task_bank/ for services_t.py
-sys.path.insert(0, str(BASE_DIR))          # local_work/ for data
+sys.path.insert(0, str(BASE_DIR.parent))
+sys.path.insert(0, str(BASE_DIR))
 from services_t import ENDPOINTS, get_token
 
 SERVICE = "vsellm"
@@ -29,31 +39,30 @@ URL = ENDPOINTS[SERVICE]
 MAX_RETRIES = 3
 RETRY_DELAY = 120
 
-
 def load_system_prompt() -> str:
+    """Load system prompt from markdown file."""
     with open(SYSTEM_PROMPT_PATH, encoding="utf-8") as f:
         return f.read()
 
 
 def extract_target_messages(dialog_json: dict) -> list[dict]:
+    """Extract and sort target messages from dialog JSON."""
     messages = dialog_json.get("answer", [])
-    messages.sort(key=lambda m: int(m.get("Ключ для разметки", 0)), reverse=True)
+    messages.sort(key=lambda m: int(m.get("Key", 0)), reverse=True)
     return messages
 
 
 def parse_model_response(content: str) -> dict | None:
-    """Parse model response JSON and return structured data, or None on error."""
+    """Parse model response JSON; return None on error."""
     try:
         data = json.loads(content)
-        if "agent" not in data:
-            return None
-        return data
+        return data if "agent" in data else None
     except (json.JSONDecodeError, TypeError):
         return None
 
 
 def get_content_from_response(data: dict) -> str:
-    """Extract content from response — same logic as services_t.py chat()."""
+    """Extract content from response - same logic as services_t.py chat()."""
     choices = data.get("choices") or []
     c0 = choices[0] if choices else {}
     if "messages" in c0:
@@ -65,153 +74,226 @@ def get_content_from_response(data: dict) -> str:
     return content
 
 
-def main():
-    system_prompt = load_system_prompt()
-
-    if not CSV_PATH.exists():
-        print(f"CSV not found: {CSV_PATH}")
-        sys.exit(1)
-
-    token = get_token(SERVICE)
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
+def log_request_response(log_path, row_index, chat_session_id,
+                         payload, response, error, status):
+    """Append a JSONL line to the request log (thread-safe via caller)."""
+    entry = {
+        "row_index": row_index,
+        "chat_session_id": chat_session_id,
+        "payload": payload,
+        "response": response,
+        "error": error,
+        "status": status,
     }
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    with open(CSV_PATH, encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
 
-    print(f"Rows: {len(rows)} | Model: {MODEL} | Service: {SERVICE}\n")
+RESULTS_DIR = BASE_DIR / "results"
+RESULTS_DIR.mkdir(exist_ok=True)
+TIMESTAMP_STR = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+REQUEST_LOG_PATH = RESULTS_DIR / f"requests_log_{TIMESTAMP_STR}.jsonl"
+log_lock = threading.Lock()
 
-    # --- Results writing setup ---
-    RESULTS_DIR = BASE_DIR / "results"
-    RESULTS_DIR.mkdir(exist_ok=True)
-    RESULTS_PATH = RESULTS_DIR / "evaluation_results.csv"
-    results_headers = [
-        "row_index", "chat_session_id", "dialog_snippet",
-        "expected_agent", "predicted_agent", "score",
-        "full_response", "status",
-    ]
-    results_rows: list[dict] = []
-
-    for i, row in enumerate(rows, 1):
-        gold = row.get("GOLDEN:agent", "").strip()
-        input_raw = row.get("INPUT:input", "").strip()
-
-        try:
-            dialog = json.loads(input_raw)
-            messages = extract_target_messages(dialog)
-            user_msg = json.dumps({"dialog": messages}, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[{i}/{len(rows)}] SKIP: {e}\n")
-            continue
-
-        payload = {
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg},
-            ],
-            "temperature": TEMPERATURE,
-            "max_tokens": MAX_TOKENS,
+def process_row(row, row_index, system_prompt, headers, url):
+    """Process a single CSV row in a thread."""
+    i = row_index
+    input_raw = row.get("INPUT:input", "").strip()
+    expected_agent = row.get("GOLDEN:agent", "").strip()
+    try:
+        dialog = json.loads(input_raw)
+        messages = extract_target_messages(dialog)
+        user_msg = json.dumps({"dialog": messages}, ensure_ascii=False, indent=2)
+    except Exception as e:
+        error_str = f"Invalid JSON: {e}"
+        with log_lock:
+            log_request_response(REQUEST_LOG_PATH, i, "unknown", None, None,
+                                 error_str, "json_error")
+        return {
+            "row_index": i, "chat_session_id": "unknown",
+            "dialog_snippet": "", "expected_agent": expected_agent,
+            "predicted_agent": "", "score": 0,
+            "full_response": "", "status": "json_error",
         }
 
-        answer = None
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                resp = requests.post(
-                    URL,
-                    headers=headers,
-                    json=payload,
-                    verify=False,
-                    timeout=(60, 180),
-                )
-                resp.raise_for_status()
-                answer = get_content_from_response(resp.json())
-                print(f"[{i}/{len(rows)}] Attempt {attempt}/{MAX_RETRIES} succeeded")
-                break
-            except Exception as e:
-                if attempt < MAX_RETRIES:
-                    print(f"[{i}/{len(rows)}] Attempt {attempt}/{MAX_RETRIES} failed: {e}")
-                    print(f"  Retrying in {RETRY_DELAY}s...")
-                    time.sleep(RETRY_DELAY)
-                else:
-                    print(f"[{i}/{len(rows)}] All {MAX_RETRIES} attempts failed: {e}")
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        "temperature": TEMPERATURE,
+        "max_tokens": MAX_TOKENS,
+    }
 
-        # --- Evaluate the model response ---
-        chat_session_id = "unknown"
-        dialog_snippet = ""
+    chat_session_id = "unknown"
+    dialog_snippet = ""
+    try:
+        ml = dialog.get("answer", [])
+        if ml:
+            chat_session_id = ml[0].get("ID_chat-sessii", "unknown")
+            first = ml[0]
+            dialog_snippet = f"{first.get('Source', '')}: {first.get('Text', '')}"[:200]
+    except (AttributeError, IndexError):
+        pass
+    return _api_call_and_evaluate(i, payload, chat_session_id, dialog_snippet,
+                                  expected_agent, headers, url, REQUEST_LOG_PATH)
+
+def _api_call_and_evaluate(i, payload, chat_session_id, dialog_snippet,
+                           expected_agent, headers, url, log_path):
+    answer = None
+    response_json = None
+    error_msg = None
+    status = "no_response"
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            messages_list = dialog.get("answer", [])
-            if messages_list:
-                chat_session_id = messages_list[0].get("ID чат-сессии", "unknown")
-                first_msg = messages_list[0]
-                dialog_snippet = f"{first_msg.get('Источник сообщения', '')}: {first_msg.get('Текст сообщения', '')}"[:200]
-        except (AttributeError, IndexError):
-            pass
-
-        if answer is None:
-            predicted_agent = ""
-            expected_agent = row.get("GOLDEN:agent", "").strip()
-            score = 0
-            status = "all_retries_failed"
-        else:
-            answer_data = parse_model_response(answer)
-
-            if answer_data is not None:
-                predicted_agent = answer_data.get("agent", "")
-                expected_agent = row.get("GOLDEN:agent", "").strip()
-                score = 1 if predicted_agent == expected_agent else 0
-                status = "success"
+            resp = requests.post(url, headers=headers, json=payload,
+                                 verify=False, timeout=(480, 480))
+            resp.raise_for_status()
+            response_json = resp.json()
+            answer = get_content_from_response(response_json)
+            break
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY)
             else:
-                predicted_agent = ""
-                expected_agent = row.get("GOLDEN:agent", "").strip()
-                score = 0
-                status = "parse_error"
+                status = "all_retries_failed"
+    if answer is None:
+        predicted_agent = ""
+        score = 0
+        if status == "no_response":
+            status = "all_retries_failed"
+    else:
+        answer_data = parse_model_response(answer)
+        if answer_data is not None:
+            predicted_agent = answer_data.get("agent", "")
+            score = 1 if predicted_agent == expected_agent else 0
+            status = "success"
+        else:
+            predicted_agent = ""
+            score = 0
+            status = "parse_error"
+    with log_lock:
+        log_request_response(log_path, i, chat_session_id, payload,
+                             response_json, error_msg, status)
+    return {"row_index": i, "chat_session_id": chat_session_id,
+            "dialog_snippet": dialog_snippet, "expected_agent": expected_agent,
+            "predicted_agent": predicted_agent, "score": score,
+            "full_response": answer or "", "status": status}
 
-        # Write result row
-        results_rows.append({
-            "row_index": i,
-            "chat_session_id": chat_session_id,
-            "dialog_snippet": dialog_snippet,
-            "expected_agent": expected_agent,
-            "predicted_agent": predicted_agent,
-            "score": score,
-            "full_response": answer,
-            "status": status,
-        })
+def main():
+    """Main loop: read CSV, process in parallel, write results."""
+    # Load system prompt and token (once, not per-thread)
+    system_prompt = load_system_prompt()
+    headers = get_token(SERVICE)
 
-        # Print progress
-        print(f"[{i}/{len(rows)}] exp={expected_agent} | pred={predicted_agent} | score={score} | status={status}")
+    # Read CSV
+    if not CSV_PATH.exists():
+        print(f"Error: CSV not found at {CSV_PATH}")
+        sys.exit(1)
 
-    # --- Write results to CSV ---
-    with open(RESULTS_PATH, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=results_headers)
+    with open(CSV_PATH, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    # Parse CLI arguments
+    parser = argparse.ArgumentParser(
+        description="Evaluate agent classification results from CSV"
+    )
+    parser.add_argument(
+        "-w", "--workers", type=int, default=10,
+        help="Number of parallel workers (default: 10)"
+    )
+    args = parser.parse_args()
+    worker_count = args.workers
+
+    if worker_count < 1:
+        parser.error("--workers must be >= 1")
+
+    print(f"Workers: {worker_count}")
+    print("=" * 80)
+    print(f"{'Row':>5}  {'Chat Session ID':>24}  {'Expected':>8}  {'Predicted':>8}  {'Score':>5}  Status")
+    print("=" * 80)
+
+    # Process rows in parallel
+    results = []
+    total = len(rows)
+
+    def process_and_collect(idx, row):
+        return process_row(row, idx, system_prompt, headers, URL)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {
+            executor.submit(process_and_collect, idx, row): idx
+            for idx, row in enumerate(rows)
+        }
+        done = 0
+        for future in concurrent.futures.as_completed(futures):
+            done += 1
+            idx = futures[future]
+            try:
+                result = future.result()
+                if result is None:
+                    result = {
+                        "row_index": idx, "chat_session_id": "unknown",
+                        "dialog_snippet": "", "expected_agent": "",
+                        "predicted_agent": "", "score": 0,
+                        "full_response": "", "status": "json_error",
+                    }
+                results.append(result)
+                print(
+                    f"{idx:>5}  {result['chat_session_id']:>24}  "
+                    f"{result['expected_agent']:>8}  {result['predicted_agent']:>8}  "
+                    f"{result['score']:>5}  {result.get('status', '?')}"
+                )
+            except Exception as e:
+                print(f"  ERROR processing row {idx}: {e}")
+                results.append({
+                    "row_index": idx, "chat_session_id": "unknown",
+                    "dialog_snippet": "", "expected_agent": "",
+                    "predicted_agent": "", "score": 0,
+                    "full_response": "", "status": "thread_error",
+                })
+
+    # Sort results by row_index for clean output
+    results.sort(key=lambda r: r["row_index"])
+
+    # Write results CSV
+    results_path = RESULTS_DIR / f"results_{TIMESTAMP_STR}.csv"
+    fieldnames = ["row_index", "chat_session_id", "dialog_snippet",
+                  "expected_agent", "predicted_agent", "score",
+                  "full_response", "status"]
+    with open(results_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(results_rows)
+        writer.writerows(results)
 
-    # --- Print summary statistics ---
-    total = len(results_rows)
-    successful = sum(1 for r in results_rows if r["status"] == "success")
-    matches = sum(1 for r in results_rows if r["score"] == 1)
-    mismatches = sum(1 for r in results_rows if r["score"] == 0)
-    parse_errors = sum(1 for r in results_rows if r["status"] == "parse_error")
-    retries_failed = sum(1 for r in results_rows if r["status"] == "all_retries_failed")
+    # Print summary
+    total_correct = sum(r["score"] for r in results)
+    status_counts = {}
+    for r in results:
+        st = r.get("status", "unknown")
+        status_counts[st] = status_counts.get(st, 0) + 1
 
-    print(f"\n{'=' * 50}")
-    print(f"EVALUATION SUMMARY")
-    print(f"{'=' * 50}")
-    print(f"Total rows:        {total}")
-    print(f"Successful:        {successful}")
-    print(f"Matches (score=1): {matches}")
-    print(f"Mismatches (0):    {mismatches}")
-    print(f"Parse errors:      {parse_errors}")
-    print(f"Retries failed:    {retries_failed}")
-    if successful > 0:
-        accuracy = matches / successful
-        print(f"Accuracy:          {accuracy:.2%} ({matches}/{successful})")
-    print(f"\nResults saved to: {RESULTS_PATH}")
+    print()
+    print("=" * 80)
+    print("SUMMARY")
+    print("=" * 80)
+    print(f"Total processed: {len(results)}/{total}")
+    print(f"Correct:         {total_correct}")
+    print(f"Accuracy:        {total_correct / len(results) * 100:.2f}%" if results else "N/A")
+    print("Status breakdown:")
+    for st, cnt in sorted(status_counts.items()):
+        print(f"  {st}: {cnt}")
+    print(f"Results saved to: {results_path}")
+    print(f"Request log:      {REQUEST_LOG_PATH}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user. Saving partial results...")
+        sys.exit(130)
+
